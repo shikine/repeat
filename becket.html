@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="ja">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Repeat (Beckett-ish Loop Prototype)</title>
+    <style>
+        :root {
+            --bg: #0b0b0f;
+            --fg: #e8e8ef;
+            --mut: #a7a7b2;
+            --line: #2a2a34;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: radial-gradient(1200px 700px at 50% 35%, #151521 0%, var(--bg) 55%, #050507 100%);
+            color: var(--fg);
+            font-family: ui-sans-serif, system-ui, -apple-system, "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+        }
+
+        .stage {
+            width: min(960px, 92vw);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, .45);
+            background: linear-gradient(180deg, rgba(255, 255, 255, .04), rgba(255, 255, 255, .01));
+        }
+
+        header {
+            padding: 16px 18px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .title {
+            font-weight: 700;
+            letter-spacing: .02em;
+        }
+
+        .meta {
+            color: var(--mut);
+            font-size: 12px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .tag {
+            border: 1px solid var(--line);
+            padding: 4px 8px;
+            border-radius: 999px;
+        }
+
+        main {
+            padding: 18px;
+            display: grid;
+            gap: 14px;
+        }
+
+        .scene {
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 14px;
+            background: rgba(0, 0, 0, .25);
+            position: relative;
+        }
+
+        .scene::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: 14px;
+            pointer-events: none;
+            background: radial-gradient(600px 240px at 50% 0%, rgba(255, 255, 255, .05), transparent 60%);
+            mix-blend-mode: screen;
+        }
+
+        .log {
+            height: 320px;
+            overflow: auto;
+            padding: 10px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: rgba(0, 0, 0, .35);
+        }
+
+        .line {
+            margin: 0 0 10px 0;
+            line-height: 1.6;
+        }
+
+        .who {
+            color: var(--mut);
+            font-weight: 600;
+            margin-right: .4em;
+        }
+
+        .narr {
+            color: #cfcfe6;
+            opacity: .9;
+            font-style: italic;
+        }
+
+        .choices {
+            display: grid;
+            gap: 10px;
+        }
+
+        button {
+            text-align: left;
+            padding: 12px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, .03);
+            color: var(--fg);
+            cursor: pointer;
+            transition: transform .06s ease, background .15s ease;
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, .06);
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+
+        .footer {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+            color: var(--mut);
+            font-size: 12px;
+        }
+
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        .noise {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            opacity: 0;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E");
+            mix-blend-mode: overlay;
+            border-radius: 14px;
+        }
+
+        .cycle-2 .noise {
+            opacity: .05;
+        }
+
+        .cycle-3 .noise {
+            opacity: .10;
+        }
+
+        .cycle-4 .noise {
+            opacity: .16;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="stage" id="app">
+        <header>
+            <div class="title">Repeat</div>
+            <div class="meta">
+                <span class="tag">静的プロトタイプ</span>
+                <span>cycle: <span class="mono" id="cycleView">1</span></span>
+                <button id="resetBtn" title="進行を初期化" style="padding:6px 10px;border-radius:10px;">reset</button>
+            </div>
+        </header>
+
+        <main>
+            <section class="scene" id="scene">
+                <div class="noise" aria-hidden="true"></div>
+                <div class="log" id="log" aria-live="polite"></div>
+            </section>
+
+            <section class="choices" id="choices"></section>
+
+            <div class="footer">
+                <div>選択して進める。終わったように見えて戻る。</div>
+                <div class="mono" id="nodeView"></div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        /**
+         * 会話ループの最小エンジン
+         * - nodes: 1ノード = 発話配列 + 選択肢
+         * - cycle: 周回数（微差の演出に使う）
+         * - 静的/単一HTMLで完結
+         */
+
+        const $log = document.getElementById("log");
+        const $choices = document.getElementById("choices");
+        const $cycleView = document.getElementById("cycleView");
+        const $nodeView = document.getElementById("nodeView");
+        const $scene = document.getElementById("scene");
+        const $resetBtn = document.getElementById("resetBtn");
+
+        const STORAGE_KEY = "repeat_prototype_state_v1";
+
+        function loadState() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) return { nodeId: "start", cycle: 1, history: [] };
+                const s = JSON.parse(raw);
+                // 最低限のバリデーション
+                if (!s || typeof s.nodeId !== "string") throw new Error("bad state");
+                return { nodeId: s.nodeId, cycle: Number(s.cycle) || 1, history: Array.isArray(s.history) ? s.history : [] };
+            } catch {
+                return { nodeId: "start", cycle: 1, history: [] };
+            }
+        }
+        function saveState() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        }
+
+        let state = loadState();
+
+        // ベケットっぽい「微差」のための文字劣化
+        function degrade(text, cycle) {
+            if (cycle <= 1) return text;
+            // 2周目: 末尾を少し欠けさせる / 3周目+: ときどき句読点を落とす
+            let t = text;
+            if (cycle === 2 && t.length > 8) t = t.slice(0, t.length - 1) + "…";
+            if (cycle >= 3) {
+                t = t.replace(/[、。]/g, (m) => (Math.random() < 0.35 ? "" : m));
+                if (Math.random() < 0.18 && t.length > 10) t = t.replace(/です|だ|する/g, "…");
+            }
+            return t;
+        }
+
+        // 同じノードでも cycle で台詞を1語だけ変える
+        function variant(text, cycle) {
+            if (cycle <= 1) return text;
+            const swaps = [
+                ["今日", "今"], ["少し", "わずかに"], ["待つ", "待っている"], ["来る", "来ない"], ["大丈夫", "たぶん"]
+            ];
+            let t = text;
+            if (cycle === 2) {
+                const [a, b] = swaps[(cycle + text.length) % swaps.length];
+                t = t.replace(a, b);
+            } else if (cycle >= 3) {
+                // 3周目以降は逆に戻したりズラしたりして不安定に
+                const [a, b] = swaps[Math.floor(Math.random() * swaps.length)];
+                t = t.includes(a) ? t.replace(a, b) : t.replace(b, a);
+            }
+            return t;
+        }
+
+        const nodes = {
+            start: {
+                lines: (cycle) => [
+                    { who: "A", text: variant("今日も待つ。", cycle) },
+                    { who: "B", text: variant("誰を？", cycle) },
+                    { who: "A", text: variant("来るはずの、誰かを。", cycle) },
+                    { who: "", text: "沈黙。", narr: true }
+                ],
+                choices: (cycle) => [
+                    { label: degrade("「場所が違うのでは？」", cycle), to: "place" },
+                    { label: degrade("「もう帰ろう」", cycle), to: "leave" },
+                    { label: degrade("「待とう」", cycle), to: "wait" },
+                ]
+            },
+
+            place: {
+                lines: (cycle) => [
+                    { who: "B", text: variant("場所が違うのかもしれない。", cycle) },
+                    { who: "A", text: variant("昨日も同じことを言った。", cycle) },
+                    { who: "B", text: variant("昨日？", cycle) },
+                    { who: "", text: "風。", narr: true }
+                ],
+                choices: (cycle) => [
+                    { label: degrade("周囲を見回す", cycle), to: "look" },
+                    { label: degrade("やはり待つ", cycle), to: "wait" },
+                    { label: degrade("帰ろう（と言う）", cycle), to: "leave" },
+                ]
+            },
+
+            look: {
+                lines: (cycle) => [
+                    { who: "", text: variant("木が一本。道が一本。空。", cycle), narr: true },
+                    { who: "A", text: variant("目印はある。", cycle) },
+                    { who: "B", text: variant("目印は、目印のふりをしている。", cycle) }
+                ],
+                choices: (cycle) => [
+                    { label: degrade("目印を信じる", cycle), to: "wait" },
+                    { label: degrade("目印を疑う", cycle), to: "wait" },
+                    { label: degrade("何もしない", cycle), to: "wait" },
+                ]
+            },
+
+            leave: {
+                lines: (cycle) => [
+                    { who: "A", text: variant("帰ろう。", cycle) },
+                    { who: "B", text: variant("帰る場所があるのか？", cycle) },
+                    { who: "A", text: variant("あるはずだ。", cycle) },
+                    { who: "", text: "二人は動かない。", narr: true }
+                ],
+                choices: (cycle) => [
+                    { label: degrade("立ち上がる（が、動かない）", cycle), to: "wait" },
+                    { label: degrade("座り直す", cycle), to: "wait" },
+                    { label: degrade("黙る", cycle), to: "wait" },
+                ]
+            },
+
+            wait: {
+                lines: (cycle) => [
+                    { who: "", text: variant("待つ時間が、時間を待っている。", cycle), narr: true },
+                    { who: "B", text: variant("来る？", cycle) },
+                    { who: "A", text: variant("来ると言われた。", cycle) },
+                    { who: "B", text: variant("誰に？", cycle) },
+                    { who: "A", text: variant("…忘れた。", cycle) }
+                ],
+                choices: (cycle) => [
+                    { label: degrade("「明日また来よう」", cycle), to: "curtain" },
+                    { label: degrade("「今夜はここで」", cycle), to: "curtain" },
+                    { label: degrade("「終わりにしよう」", cycle), to: "curtain" },
+                ]
+            },
+
+            curtain: {
+                lines: (cycle) => [
+                    { who: "", text: "幕が下りる。", narr: true },
+                    { who: "", text: variant("だが、下りきらない。", cycle), narr: true },
+                ],
+                choices: (cycle) => [
+                    { label: degrade("（次の幕へ）", cycle), to: "__loop__" },
+                ]
+            }
+        };
+
+        function appendLine(line) {
+            const p = document.createElement("p");
+            p.className = "line";
+            if (line.narr) {
+                p.innerHTML = `<span class="narr">${escapeHtml(line.text)}</span>`;
+            } else {
+                p.innerHTML = `<span class="who">${escapeHtml(line.who)}</span>${escapeHtml(line.text)}`;
+            }
+            $log.appendChild(p);
+            $log.scrollTop = $log.scrollHeight;
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+            })[c]);
+        }
+
+        function render() {
+            $cycleView.textContent = String(state.cycle);
+            $nodeView.textContent = `node: ${state.nodeId}`;
+            document.getElementById("app").classList.toggle("cycle-2", state.cycle === 2);
+            document.getElementById("app").classList.toggle("cycle-3", state.cycle === 3);
+            document.getElementById("app").classList.toggle("cycle-4", state.cycle >= 4);
+
+            const node = nodes[state.nodeId];
+            if (!node) return;
+
+            // ログは「今の周回の始まりから」表示（試作なので単純化）
+            $log.innerHTML = "";
+            const lines = node.lines(state.cycle).map(l => ({
+                ...l,
+                text: degrade(l.text, state.cycle)
+            }));
+            lines.forEach(appendLine);
+
+            $choices.innerHTML = "";
+            node.choices(state.cycle).forEach(ch => {
+                const btn = document.createElement("button");
+                btn.textContent = ch.label;
+                btn.addEventListener("click", () => go(ch.to, ch.label));
+                $choices.appendChild(btn);
+            });
+        }
+
+        function go(to, label) {
+            // 履歴（将来“過去ログが自分を侵食”に拡張できる）
+            state.history.push({ cycle: state.cycle, from: state.nodeId, pick: label });
+
+            if (to === "__loop__") {
+                // ループ：cycle++ して start に戻す（ここがベケットの核）
+                state.cycle = Math.min(state.cycle + 1, 99);
+                state.nodeId = "start";
+            } else {
+                state.nodeId = to;
+            }
+            saveState();
+            render();
+        }
+
+        $resetBtn.addEventListener("click", () => {
+            state = { nodeId: "start", cycle: 1, history: [] };
+            saveState();
+            render();
+        });
+
+        render();
+    </script>
+</body>
+
+</html>
