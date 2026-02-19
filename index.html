@@ -18,10 +18,7 @@
       background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.01));
     }
 
-    /* 立ち絵を重ねるためのラッパー */
-    .stageWrap{
-      position:relative;
-    }
+    .stageWrap{ position:relative; }
 
     header{
       padding:16px 18px; display:flex; gap:12px; align-items:center; justify-content:space-between;
@@ -77,7 +74,7 @@
     .cycle-3 .noise{ opacity:.10; }
     .cycle-4 .noise{ opacity:.16; }
 
-    /* ===== 立ち絵（PNG透過） ===== */
+    /* ===== 立ち絵（口パク対応） ===== */
     .chara{
       position:absolute;
       bottom:10px;
@@ -87,11 +84,11 @@
       pointer-events:none;
       transition: opacity .12s ease, transform .12s ease, filter .12s ease;
       z-index:1;
+      user-select:none;
     }
     .chara.left{ left:14px; }
     .chara.right{ right:14px; transform: scaleX(-1); }
 
-    /* 話してる側を強調 */
     .chara.is-speaking{
       opacity:1;
       filter: drop-shadow(0 26px 60px rgba(0,0,0,.65));
@@ -113,9 +110,9 @@
 <body>
   <div class="stage" id="app">
     <div class="stageWrap">
-      <!-- ここにPNGを置く： /assets/a.png /assets/b.png -->
-      <img class="chara left"  id="charaA" src="./assets/a.png" alt="A">
-      <img class="chara right" id="charaB" src="./assets/b.png" alt="B">
+      <!-- 口パク用PNG：assets/ に置く -->
+      <img class="chara left"  id="charaA" src="./assets/a_idle.png" alt="A">
+      <img class="chara right" id="charaB" src="./assets/b_idle.png" alt="B">
 
       <header>
         <div class="title">Repeat</div>
@@ -143,13 +140,6 @@
   </div>
 
 <script>
-/**
- * 会話ループの最小エンジン
- * - nodes: 1ノード = 発話配列 + 選択肢
- * - cycle: 周回数（微差の演出に使う）
- * - 静的/単一HTMLで完結
- */
-
 const $log = document.getElementById("log");
 const $choices = document.getElementById("choices");
 const $cycleView = document.getElementById("cycleView");
@@ -160,6 +150,20 @@ const charaA = document.getElementById("charaA");
 const charaB = document.getElementById("charaB");
 
 const STORAGE_KEY = "repeat_prototype_state_v1";
+
+const SPRITES = {
+  A: { idle: "./assets/a_idle.png", talk: "./assets/a_talk.png" },
+  B: { idle: "./assets/b_idle.png", talk: "./assets/b_talk.png" },
+};
+
+function preload(url){
+  return new Promise((resolve)=>{
+    const img = new Image();
+    img.onload = ()=>resolve(true);
+    img.onerror = ()=>resolve(false);
+    img.src = url;
+  });
+}
 
 function loadState(){
   try{
@@ -172,13 +176,79 @@ function loadState(){
     return { nodeId:"start", cycle:1, history:[] };
   }
 }
-function saveState(){
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
+function saveState(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 let state = loadState();
 
-// ベケットっぽい「微差」のための文字劣化
+/* ===== 口パク制御 ===== */
+let talkTimerA = null;
+let talkTimerB = null;
+
+function safeHideIfMissing(imgEl){
+  if(!imgEl) return;
+  imgEl.addEventListener("error", ()=>{ imgEl.style.display = "none"; });
+}
+safeHideIfMissing(charaA);
+safeHideIfMissing(charaB);
+
+function setSpeakingFocus(who){
+  if(!charaA || !charaB) return;
+
+  charaA.classList.remove("is-speaking","is-dim");
+  charaB.classList.remove("is-speaking","is-dim");
+
+  if(who === "A"){
+    charaA.classList.add("is-speaking");
+    charaB.classList.add("is-dim");
+  } else if(who === "B"){
+    charaB.classList.add("is-speaking");
+    charaA.classList.add("is-dim");
+  } else {
+    charaA.classList.add("is-dim");
+    charaB.classList.add("is-dim");
+  }
+}
+
+function mouthFlap(who, text){
+  // ナレーションは口パクしない
+  if(who !== "A" && who !== "B") return;
+
+  const img = who === "A" ? charaA : charaB;
+  const sp = SPRITES[who];
+  if(!img || img.style.display === "none") return;
+
+  // テキスト長に応じて時間を決める（やりすぎない）
+  const len = String(text || "").length;
+  const duration = Math.min(900, Math.max(260, len * 55)); // 260ms〜900ms
+
+  // 既存タイマーをクリア
+  if(who === "A" && talkTimerA) clearTimeout(talkTimerA);
+  if(who === "B" && talkTimerB) clearTimeout(talkTimerB);
+
+  // 口開きにする
+  img.src = sp.talk;
+
+  // ちょいちょい口をパクパク（talk/idle切替）
+  // CSSアニメではなくタイマーで簡易制御（静的でOK）
+  const start = performance.now();
+  const flap = ()=>{
+    const t = performance.now() - start;
+    if(t >= duration){
+      img.src = sp.idle;
+      return;
+    }
+    img.src = (img.src.includes("_talk") ? sp.idle : sp.talk);
+    setTimeout(flap, 120);
+  };
+  setTimeout(flap, 120);
+
+  // 最後に必ず idle に戻す保険
+  const endTimer = setTimeout(()=>{ img.src = sp.idle; }, duration + 160);
+
+  if(who === "A") talkTimerA = endTimer;
+  if(who === "B") talkTimerB = endTimer;
+}
+
+/* ===== 微差演出 ===== */
 function degrade(text, cycle){
   if(cycle <= 1) return text;
   let t = text;
@@ -189,8 +259,6 @@ function degrade(text, cycle){
   }
   return t;
 }
-
-// 同じノードでも cycle で台詞を1語だけ変える
 function variant(text, cycle){
   if(cycle <= 1) return text;
   const swaps = [
@@ -221,7 +289,6 @@ const nodes = {
       { label: degrade("「待とう」", cycle), to:"wait" },
     ]
   },
-
   place: {
     lines: (cycle)=>[
       { who:"B", text: variant("場所が違うのかもしれない。", cycle) },
@@ -235,7 +302,6 @@ const nodes = {
       { label: degrade("帰ろう（と言う）", cycle), to:"leave" },
     ]
   },
-
   look: {
     lines: (cycle)=>[
       { who:"",  text: variant("木が一本。道が一本。空。", cycle), narr:true },
@@ -248,7 +314,6 @@ const nodes = {
       { label: degrade("何もしない", cycle), to:"wait" },
     ]
   },
-
   leave: {
     lines: (cycle)=>[
       { who:"A", text: variant("帰ろう。", cycle) },
@@ -262,7 +327,6 @@ const nodes = {
       { label: degrade("黙る", cycle), to:"wait" },
     ]
   },
-
   wait: {
     lines: (cycle)=>[
       { who:"",  text: variant("待つ時間が、時間を待っている。", cycle), narr:true },
@@ -277,7 +341,6 @@ const nodes = {
       { label: degrade("「終わりにしよう」", cycle), to:"curtain" },
     ]
   },
-
   curtain: {
     lines: (cycle)=>[
       { who:"", text:"幕が下りる。", narr:true },
@@ -295,50 +358,33 @@ function escapeHtml(s){
   })[c]);
 }
 
-function setSpeaking(who){
-  // 画像が無い場合でも壊れないようにガード
-  if(!charaA || !charaB) return;
-
-  charaA.classList.remove("is-speaking","is-dim");
-  charaB.classList.remove("is-speaking","is-dim");
-
-  if(who === "A"){
-    charaA.classList.add("is-speaking");
-    charaB.classList.add("is-dim");
-  } else if(who === "B"){
-    charaB.classList.add("is-speaking");
-    charaA.classList.add("is-dim");
-  } else {
-    // ナレーションは両方少し暗く
-    charaA.classList.add("is-dim");
-    charaB.classList.add("is-dim");
-  }
-}
-
 function appendLine(line){
   const p = document.createElement("p");
   p.className = "line";
 
+  const text = line.narr ? line.text : line.text;
   if(line.narr){
-    p.innerHTML = `<span class="narr">${escapeHtml(line.text)}</span>`;
+    p.innerHTML = `<span class="narr">${escapeHtml(text)}</span>`;
   } else {
-    p.innerHTML = `<span class="who">${escapeHtml(line.who)}</span>${escapeHtml(line.text)}`;
+    p.innerHTML = `<span class="who">${escapeHtml(line.who)}</span>${escapeHtml(text)}`;
   }
 
   $log.appendChild(p);
   $log.scrollTop = $log.scrollHeight;
 
-  // 話者に応じて立ち絵を強調
-  setSpeaking(line.narr ? "" : line.who);
+  const who = line.narr ? "" : line.who;
+  setSpeakingFocus(who);
+  mouthFlap(who, text);
 }
 
 function render(){
   $cycleView.textContent = String(state.cycle);
   $nodeView.textContent = `node: ${state.nodeId}`;
 
-  document.getElementById("app").classList.toggle("cycle-2", state.cycle===2);
-  document.getElementById("app").classList.toggle("cycle-3", state.cycle===3);
-  document.getElementById("app").classList.toggle("cycle-4", state.cycle>=4);
+  const app = document.getElementById("app");
+  app.classList.toggle("cycle-2", state.cycle===2);
+  app.classList.toggle("cycle-3", state.cycle===3);
+  app.classList.toggle("cycle-4", state.cycle>=4);
 
   const node = nodes[state.nodeId];
   if(!node) return;
@@ -379,26 +425,23 @@ $resetBtn.addEventListener("click", ()=>{
   render();
 });
 
-// 画像が無い/パス違いでも壊れないように、読み込み失敗時は非表示
-[charaA, charaB].forEach(img=>{
-  if(!img) return;
-  img.addEventListener("error", ()=>{ img.style.display = "none"; });
-});
+// 画像プリロード（無い場合でも落ちない）
+(async ()=>{
+  await Promise.all([
+    preload(SPRITES.A.idle), preload(SPRITES.A.talk),
+    preload(SPRITES.B.idle), preload(SPRITES.B.talk),
+  ]);
+  // 初期画像を確実にidleに
+  if(charaA && charaA.style.display !== "none") charaA.src = SPRITES.A.idle;
+  if(charaB && charaB.style.display !== "none") charaB.src = SPRITES.B.idle;
+  render();
+})();
 
-render();
-
-/* ===== DEBUG HELPERS（任意：Consoleから操作できる） ===== */
+/* DEBUG */
 window.__repeat = {
   get state(){ return state; },
   setNode(id){ state.nodeId = id; saveState(); render(); },
   setCycle(n){ state.cycle = n; saveState(); render(); },
-  pick(i){
-    const node = nodes[state.nodeId];
-    const ch = node?.choices(state.cycle)?.[i];
-    if(!ch) { console.warn("no choice", i); return; }
-    go(ch.to, ch.label);
-  },
-  dump(){ console.table(state.history); return state; },
   clear(){
     localStorage.removeItem(STORAGE_KEY);
     state = { nodeId:"start", cycle:1, history:[] };
